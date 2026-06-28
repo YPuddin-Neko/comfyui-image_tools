@@ -741,5 +741,5 @@ NODE_CLASS_MAPPINGS = {
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "IS_SaveImagePlus": "💾 Save Image Plus | 保存图像增强版",
+    "IS_SaveImagePlus": "Save Image Plus | 保存图像增强版",
 }

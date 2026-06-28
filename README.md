@@ -1,6 +1,6 @@
 # 🛠️ ComfyUI Image Tools | 图片工具箱
 
-一个 ComfyUI 自定义节点插件(代码均为AI生成)，包含图片选择器和增强版图片保存等实用工具。
+一个 ComfyUI 自定义节点插件(代码均为AI生成)，包含图片选择器、图片对比和增强版图片保存等实用工具。
 
 ## 🖼️ 例图
 
@@ -9,7 +9,7 @@
 
 ## ✨ 功能特点
 
-### 🖼️ Image Selector | 图片选择器
+### Image Selector | 图片选择器
 
 - **始终弹窗** - 无论输入是单张还是多张图片，都会弹出选择窗口
 - **大图预览** - 图片以大尺寸完整展示；点击 🔍 按钮或双击可查看原尺寸大图
@@ -23,7 +23,11 @@
 - **多用户隔离** - 多用户/多标签页场景下弹窗只在对应工作流页面显示
 - **优雅动画** - 流畅的弹窗动画和交互效果
 
-### 💾 Save Image Plus | 保存图像增强版
+### Image Compare | 图片对比
+
+- **多图导航** - 支持多对图片对比：底部页码显示 + 滑条拖动 + 左右箭头切换
+
+### Save Image Plus | 保存图像增强版
 
 > 📌 此节点的图片保存功能移植自 [ComfyUI-Danbooru-Gallery](https://github.com/Aaalice233/ComfyUI-Danbooru-Gallery) 的 SaveImagePlus 节点，在此基础上进行了独立实现和改进（移除外部依赖、增强种子读取兼容性、修复子工作流保存等）。感谢原作者的工作！
 
@@ -52,7 +56,7 @@ git clone https://github.com/YPuddin-Neko/comfyui-image_tools
 
 ### 图片选择器
 
-1. 在 ComfyUI 中，右键画布 → 添加节点 → `image/utils` → `🖼️ Image Selector | 图片选择器`
+1. 在 ComfyUI 中，右键画布 → 添加节点 → `image/utils` → `Image Selector | 图片选择器`
 2. 将图片输出连接到该节点的 `images` 输入端
 3. 可选：调整提示音开关、音量和超时时间
 4. 运行工作流，弹出图片选择窗口
@@ -61,9 +65,17 @@ git clone https://github.com/YPuddin-Neko/comfyui-image_tools
 
 > ⚠️ **注意**：点击「✕ 取消」或不选择任何图片将**中断工作流**，不会继续执行。
 
+### 图片对比
+
+1. 右键画布 → 添加节点 → `image/utils` → `Image Compare | 图片对比`
+2. 将两组图片分别连接到 `images_a` 和 `images_b` 输入端
+3. 运行工作流，节点内直接显示对比图
+4. 将鼠标移入节点区域，分界线跟随鼠标移动，左侧显示 B 图、右侧显示 A 图
+5. 多张图片时，使用底部滑条或左右箭头切换不同对比
+
 ### 保存图像增强版
 
-1. 右键画布 → 添加节点 → `image/utils` → `💾 Save Image Plus | 保存图像增强版`
+1. 右键画布 → 添加节点 → `image/utils` → `Save Image Plus | 保存图像增强版`
 2. 将图片连接到 `images` 输入端（可搭配图片选择器使用）
 3. 可选：连接 `positive_prompt`、`negative_prompt`、`lora_syntax`、`checkpoint_name` 输入
 4. 设置文件名前缀（支持占位符）、保存格式和质量
@@ -71,7 +83,7 @@ git clone https://github.com/YPuddin-Neko/comfyui-image_tools
 
 ## 📸 节点参数
 
-### 🖼️ Image Selector
+### Image Selector
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
@@ -81,6 +93,15 @@ git clone https://github.com/YPuddin-Neko/comfyui-image_tools
 | timeout | INT | 300 | 图片选择超时时间（秒），范围 10 ~ 3600 |
 
 **输出端**：`images`（IMAGE 类型）- 用户选中的图片
+
+### 🔍 Image Compare
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| images_a | IMAGE | 第一组图片（A 组） |
+| images_b | IMAGE | 第二组图片（B 组） |
+
+**输出端**：`images_a`（IMAGE）、`images_b`（IMAGE）- 直通输出原始图片
 
 ### 💾 Save Image Plus
 
@@ -131,10 +152,12 @@ git clone https://github.com/YPuddin-Neko/comfyui-image_tools
 comfyui-image_tools/
 ├── __init__.py              # 插件入口
 ├── nodes.py                 # 图片选择器节点 & 后端逻辑
+├── image_compare.py         # 图片对比节点
 ├── save_image_plus.py       # 保存图像增强版节点
 ├── web/
 │   └── js/
-│       └── imageSelector.js # 前端弹窗 UI
+│       ├── imageSelector.js # 图片选择器前端 UI
+│       └── imageCompare.js  # 图片对比前端 UI
 ├── sound/
 │   └── din.wav              # 提示音文件
 ├── pyproject.toml           # 项目配置

@@ -2,28 +2,28 @@ import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 
 /**
- * ComfyUI Image Compare - 节点内嵌图片对比组件
- * 支持滑块对比、并排对比、差异对比三种模式
- * 使用 /view API 按需加载图片，避免 base64 性能问题
+ * ComfyUI Image Compare - 图片对比节点
+ * 参考 ComfyUI-Danbooru-Gallery 的 SimpleImageCompare 实现
+ * 使用 addCustomWidget + onMouseEnter/Leave/Move 实现鼠标悬停滑动对比
  */
 
-// ============================
-// 工具函数
-// ============================
-function getViewUrl(urlObj) {
-    return api.apiURL(
-        `/view?filename=${encodeURIComponent(urlObj.filename)}&type=${urlObj.type || "temp"}&subfolder=${urlObj.subfolder || ""}&r=${Math.random()}`
-    );
+// 工具函数：节流
+function throttle(func, delay) {
+    let lastCall = 0;
+    return function (...args) {
+        const now = Date.now();
+        if (now - lastCall >= delay) {
+            lastCall = now;
+            func.apply(this, args);
+        }
+    };
 }
 
-function loadImage(src) {
-    return new Promise((resolve, reject) => {
-        const img = new Image();
-        img.crossOrigin = "anonymous";
-        img.onload = () => resolve(img);
-        img.onerror = reject;
-        img.src = src;
-    });
+// 图像数据转 URL
+function imageDataToUrl(data) {
+    return api.apiURL(
+        `/view?filename=${encodeURIComponent(data.filename)}&type=${data.type || "temp"}&subfolder=${data.subfolder || ""}${app.getPreviewFormatParam()}${app.getRandParam()}`
+    );
 }
 
 // ============================
@@ -32,559 +32,503 @@ function loadImage(src) {
 class ImageCompareWidget {
     constructor(node) {
         this.node = node;
+        this.name = "image_compare_widget";
+        this.type = "custom";
+
+        // 鼠标状态
+        this.isPointerOver = false;
+        this.pointerOverPos = [0, 0];
+
+        // 图片
+        this.imgObjA = null;
+        this.imgObjB = null;
+
+        // 多图导航
         this.urlsA = [];
         this.urlsB = [];
-        this.mode = "slider";
-        this.labelA = "A";
-        this.labelB = "B";
         this.currentIndex = 0;
         this.totalPairs = 0;
-        this.sliderPos = 0.5;
-        this.isDragging = false;
-
-        // 图片缓存（滑动窗口，只缓存 ±2）
         this.imageCache = {};
-        this.CACHE_WINDOW = 2;
+        this.draggingNav = false; // 导航条拖动状态
 
-        // 当前加载的图片
-        this.imgA = null;
-        this.imgB = null;
-        this.loading = false;
+        // 布局缓存
+        this.cachedDrawData = null;
+        this.lastNodeSize = null;
+        this.lastDrawY = 0; // 记住 draw 时的 y 起始位置
 
-        // 创建 DOM
-        this.element = document.createElement("div");
-        this.element.style.cssText = "width:100%;display:flex;flex-direction:column;background:#111;border-radius:6px;overflow:hidden;";
+        // 选择器 hitAreas
+        this.hitAreas = {};
 
-        // 对比画布
-        this.canvas = document.createElement("canvas");
-        this.canvas.style.cssText = "width:100%;cursor:col-resize;display:block;background:#0a0a0a;";
-        this.element.appendChild(this.canvas);
+        // 导航条布局（缓存给拖动用）
+        this.navBarX = 0;
+        this.navBarW = 0;
 
-        // 导航栏
-        this.navBar = document.createElement("div");
-        this.navBar.style.cssText = "display:flex;align-items:center;gap:6px;padding:6px 8px;background:#1a1a2e;";
-        this._buildNav();
-        this.element.appendChild(this.navBar);
-
-        // 缩略图条
-        this.thumbStrip = document.createElement("div");
-        this.thumbStrip.style.cssText = "display:flex;gap:3px;padding:4px 8px 6px;background:#1a1a2e;overflow-x:auto;scrollbar-width:thin;scrollbar-color:#3a3a5c #1a1a2e;border-top:1px solid #2a2a40;";
-        this.element.appendChild(this.thumbStrip);
-
-        // 绑定画布交互
-        this._bindCanvasEvents();
+        // 性能优化：节流
+        this.throttledMouseMove = throttle(this.handleMouseMove.bind(this), 16);
     }
 
-    _buildNav() {
-        const n = this.navBar;
-        n.innerHTML = "";
+    // 执行完成后接收数据
+    onExecuted(output) {
+        const urlsA = output?.images_a || [];
+        const urlsB = output?.images_b || [];
+        if (!urlsA.length || !urlsB.length) return;
 
-        // 左箭头
-        const btnPrev = this._createBtn("◀", () => this.goTo(this.currentIndex - 1));
-        n.appendChild(btnPrev);
-
-        // 滑条
-        this.navSlider = document.createElement("input");
-        this.navSlider.type = "range";
-        this.navSlider.min = "1";
-        this.navSlider.max = "1";
-        this.navSlider.value = "1";
-        this.navSlider.style.cssText = "flex:1;height:4px;-webkit-appearance:none;appearance:none;background:#2a2a4a;border-radius:2px;outline:none;cursor:pointer;";
-        this.navSlider.addEventListener("input", () => {
-            this.goTo(parseInt(this.navSlider.value) - 1);
-        });
-        n.appendChild(this.navSlider);
-
-        // 右箭头
-        const btnNext = this._createBtn("▶", () => this.goTo(this.currentIndex + 1));
-        n.appendChild(btnNext);
-
-        // 数字输入
-        this.navInput = document.createElement("input");
-        this.navInput.type = "number";
-        this.navInput.min = "1";
-        this.navInput.value = "1";
-        this.navInput.style.cssText = "width:36px;padding:2px 4px;border-radius:4px;border:1px solid #3a3a5c;background:#0e0e1a;color:#e0e0e0;font-size:11px;text-align:center;outline:none;";
-        this.navInput.addEventListener("change", () => {
-            this.goTo(parseInt(this.navInput.value) - 1);
-        });
-        this.navInput.addEventListener("keydown", (e) => {
-            if (e.key === "Enter") {
-                this.goTo(parseInt(this.navInput.value) - 1);
-                this.navInput.blur();
-            }
-            e.stopPropagation();
-        });
-        // 阻止 ComfyUI 拦截 input 事件
-        this.navInput.addEventListener("keyup", (e) => e.stopPropagation());
-        this.navInput.addEventListener("keypress", (e) => e.stopPropagation());
-        n.appendChild(this.navInput);
-
-        // 总数
-        this.navTotal = document.createElement("span");
-        this.navTotal.style.cssText = "font-size:11px;color:#666;white-space:nowrap;";
-        this.navTotal.textContent = "/ 0";
-        n.appendChild(this.navTotal);
-    }
-
-    _createBtn(text, onClick) {
-        const btn = document.createElement("button");
-        btn.textContent = text;
-        btn.style.cssText = "width:22px;height:22px;border-radius:4px;border:1px solid #3a3a5c;background:transparent;color:#ccc;font-size:11px;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:all 0.15s;padding:0;";
-        btn.addEventListener("mouseenter", () => {
-            btn.style.background = "rgba(83,92,236,0.2)";
-            btn.style.borderColor = "#535cec";
-        });
-        btn.addEventListener("mouseleave", () => {
-            btn.style.background = "transparent";
-            btn.style.borderColor = "#3a3a5c";
-        });
-        btn.addEventListener("click", onClick);
-        return btn;
-    }
-
-    _bindCanvasEvents() {
-        this.canvas.addEventListener("mousedown", (e) => {
-            if (this.mode !== "slider") return;
-            this.isDragging = true;
-            this._updateSliderFromMouse(e);
-        });
-
-        // 全局 mousemove/mouseup 确保拖出画布仍生效
-        document.addEventListener("mousemove", (e) => {
-            if (!this.isDragging) return;
-            this._updateSliderFromMouse(e);
-        });
-
-        document.addEventListener("mouseup", () => {
-            this.isDragging = false;
-        });
-    }
-
-    _updateSliderFromMouse(e) {
-        const rect = this.canvas.getBoundingClientRect();
-        this.sliderPos = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-        this.draw();
-    }
-
-    // ============================
-    // 数据更新
-    // ============================
-    setData(urlsA, urlsB, mode, labelA, labelB) {
-        this.urlsA = urlsA || [];
-        this.urlsB = urlsB || [];
-        this.mode = mode || "slider";
-        this.labelA = labelA || "A";
-        this.labelB = labelB || "B";
-        this.totalPairs = Math.min(this.urlsA.length, this.urlsB.length);
+        this.urlsA = urlsA;
+        this.urlsB = urlsB;
+        this.totalPairs = Math.min(urlsA.length, urlsB.length);
         this.currentIndex = 0;
-        this.sliderPos = 0.5;
-
-        // 清空缓存
         this.imageCache = {};
+        this.cachedDrawData = null;
 
-        // 更新导航
-        this.navSlider.max = String(Math.max(1, this.totalPairs));
-        this.navSlider.value = "1";
-        this.navInput.max = String(this.totalPairs);
-        this.navInput.value = "1";
-        this.navTotal.textContent = `/ ${this.totalPairs}`;
-
-        // 更新画布模式光标
-        this.canvas.style.cursor = this.mode === "slider" ? "col-resize" : "default";
-
-        // 构建缩略图
-        this._buildThumbs();
-
-        // 加载第一对
         this._loadPair(0);
     }
 
-    // ============================
-    // 图片加载（带缓存窗口）
-    // ============================
-    async _loadPair(index) {
+    // 加载一对图片
+    _loadPair(index) {
         if (index < 0 || index >= this.totalPairs) return;
 
-        this.loading = true;
-        this.draw(); // 显示 loading 状态
-
-        const keyA = `a_${index}`;
-        const keyB = `b_${index}`;
-
-        try {
-            // 并行加载 A 和 B
-            const [imgA, imgB] = await Promise.all([
-                this.imageCache[keyA]
-                    ? Promise.resolve(this.imageCache[keyA])
-                    : loadImage(getViewUrl(this.urlsA[index])),
-                this.imageCache[keyB]
-                    ? Promise.resolve(this.imageCache[keyB])
-                    : loadImage(getViewUrl(this.urlsB[index])),
-            ]);
-
-            // 存入缓存
-            this.imageCache[keyA] = imgA;
-            this.imageCache[keyB] = imgB;
-
-            // 当前对
-            if (this.currentIndex === index) {
-                this.imgA = imgA;
-                this.imgB = imgB;
-                this.loading = false;
-                this.draw();
-            }
-        } catch (err) {
-            console.warn(`[Image Compare] 加载图片失败 #${index}:`, err);
-            this.loading = false;
-            this.draw();
+        const cacheKey = `pair_${index}`;
+        if (this.imageCache[cacheKey]) {
+            this.imgObjA = this.imageCache[cacheKey].a;
+            this.imgObjB = this.imageCache[cacheKey].b;
+            this.cachedDrawData = null;
+            this.node.setDirtyCanvas(true, false);
+            return;
         }
 
-        // 预加载相邻图片 & 清理远处缓存
-        this._manageCache(index);
+        const imgA = new Image();
+        const imgB = new Image();
+        let loaded = 0;
+        const self = this;
+
+        const onLoad = () => {
+            loaded++;
+            if (loaded === 2) {
+                self.imageCache[cacheKey] = { a: imgA, b: imgB };
+                if (self.currentIndex === index) {
+                    self.imgObjA = imgA;
+                    self.imgObjB = imgB;
+                    self.cachedDrawData = null;
+                    self.node.setDirtyCanvas(true, false);
+                }
+                // 预加载相邻 & 清理远处
+                self._preloadAndClean(index);
+            }
+        };
+
+        imgA.onload = onLoad;
+        imgB.onload = onLoad;
+        imgA.onerror = () => console.warn("[IC] Failed A #" + index);
+        imgB.onerror = () => console.warn("[IC] Failed B #" + index);
+        imgA.src = imageDataToUrl(this.urlsA[index]);
+        imgB.src = imageDataToUrl(this.urlsB[index]);
     }
 
-    async _manageCache(centerIndex) {
-        // 预加载 ±CACHE_WINDOW 范围的图片
-        for (let offset = 1; offset <= this.CACHE_WINDOW; offset++) {
-            for (const idx of [centerIndex + offset, centerIndex - offset]) {
-                if (idx < 0 || idx >= this.totalPairs) continue;
-                const kA = `a_${idx}`, kB = `b_${idx}`;
-                if (!this.imageCache[kA]) {
-                    try {
-                        this.imageCache[kA] = await loadImage(getViewUrl(this.urlsA[idx]));
-                    } catch (e) { /* ignore */ }
-                }
-                if (!this.imageCache[kB]) {
-                    try {
-                        this.imageCache[kB] = await loadImage(getViewUrl(this.urlsB[idx]));
-                    } catch (e) { /* ignore */ }
-                }
-            }
+    _preloadAndClean(centerIdx) {
+        // 预加载 ±1
+        for (const idx of [centerIdx - 1, centerIdx + 1]) {
+            if (idx < 0 || idx >= this.totalPairs) continue;
+            const key = `pair_${idx}`;
+            if (this.imageCache[key]) continue;
+            const a = new Image(), b = new Image();
+            let cnt = 0;
+            const self = this;
+            const done = () => { cnt++; if (cnt === 2) self.imageCache[key] = { a, b }; };
+            a.onload = done; b.onload = done;
+            a.src = imageDataToUrl(this.urlsA[idx]);
+            b.src = imageDataToUrl(this.urlsB[idx]);
         }
-
-        // 清理远处缓存
-        const keys = Object.keys(this.imageCache);
-        for (const key of keys) {
-            const parts = key.split("_");
-            const idx = parseInt(parts[1]);
-            if (Math.abs(idx - centerIndex) > this.CACHE_WINDOW + 1) {
-                delete this.imageCache[key];
-            }
+        // 清理 ±3 以外
+        for (const key of Object.keys(this.imageCache)) {
+            const idx = parseInt(key.split("_")[1]);
+            if (Math.abs(idx - centerIdx) > 3) delete this.imageCache[key];
         }
     }
 
-    // ============================
-    // 导航
-    // ============================
-    goTo(index) {
+    _goTo(index) {
         index = Math.max(0, Math.min(this.totalPairs - 1, index));
-        if (index === this.currentIndex && this.imgA && this.imgB) return;
-
+        if (index === this.currentIndex && this.imgObjA && this.imgObjB) return;
         this.currentIndex = index;
-        this.navSlider.value = String(index + 1);
-        this.navInput.value = String(index + 1);
-
-        // 更新缩略图高亮
-        this.thumbStrip.querySelectorAll(".ic-thumb").forEach((el, i) => {
-            el.style.borderColor = i === index ? "#535cec" : "transparent";
-            el.style.opacity = i === index ? "1" : "0.5";
-        });
-        // 滚动到可见
-        const activeThumb = this.thumbStrip.children[index];
-        if (activeThumb) {
-            activeThumb.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "center" });
-        }
-
+        this.cachedDrawData = null;
         this._loadPair(index);
     }
 
     // ============================
-    // 缩略图条
+    // 鼠标事件
     // ============================
-    _buildThumbs() {
-        this.thumbStrip.innerHTML = "";
+    onMouseEnter(event) {
+        this.isPointerOver = true;
+        this.node.setDirtyCanvas(true, false);
+    }
 
-        if (this.totalPairs <= 1) {
-            this.thumbStrip.style.display = "none";
+    onMouseLeave(event) {
+        this.isPointerOver = false;
+        this.node.setDirtyCanvas(true, false);
+    }
+
+    handleMouseMove(pos) {
+        if (!this.isPointerOver) return;
+
+        // 导航条拖动
+        if (this.draggingNav && this.totalPairs > 1 && this.navBounds) {
+            const { trackX, trackW } = this.navBounds;
+            const ratio = Math.max(0, Math.min(1, (pos[0] - trackX) / trackW));
+            this._goTo(Math.round(ratio * (this.totalPairs - 1)));
             return;
         }
-        this.thumbStrip.style.display = "flex";
 
-        for (let i = 0; i < this.totalPairs; i++) {
-            const thumb = document.createElement("img");
-            thumb.className = "ic-thumb";
-            thumb.src = getViewUrl(this.urlsA[i]);
-            thumb.style.cssText = `width:32px;height:32px;border-radius:3px;border:2px solid ${i === 0 ? "#535cec" : "transparent"};object-fit:cover;cursor:pointer;flex-shrink:0;opacity:${i === 0 ? "1" : "0.5"};transition:all 0.15s;`;
-            thumb.addEventListener("click", () => this.goTo(i));
-            thumb.addEventListener("mouseenter", () => {
-                if (i !== this.currentIndex) thumb.style.opacity = "0.8";
-            });
-            thumb.addEventListener("mouseleave", () => {
-                if (i !== this.currentIndex) thumb.style.opacity = "0.5";
-            });
-            // 缩略图加载失败时用占位
-            thumb.onerror = () => {
-                thumb.style.background = "#2a2a4a";
-                thumb.alt = String(i + 1);
-            };
-            this.thumbStrip.appendChild(thumb);
+        const oldX = this.pointerOverPos[0];
+        this.pointerOverPos = [...pos];
+        if (Math.abs(oldX - pos[0]) > 1) {
+            this.node.setDirtyCanvas(true, false);
         }
+    }
+
+    onMouseMove(event, pos, canvas) {
+        // 检测鼠标抬起结束拖动
+        if (this.draggingNav && event && event.buttons === 0) {
+            this.draggingNav = false;
+        }
+        this.throttledMouseMove(pos);
+    }
+
+    onMouseUp(event) {
+        this.draggingNav = false;
+    }
+
+    // 点击
+    mouse(event, pos, node) {
+        if (event.type === "pointerdown") {
+            for (const part of Object.values(this.hitAreas)) {
+                if (this._clickInBounds(pos, part.bounds)) {
+                    if (part.onDown) { part.onDown.call(this, pos); return true; }
+                }
+            }
+        }
+        return false;
+    }
+
+    _clickInBounds(pos, b) {
+        return pos[0] >= b[0] && pos[0] <= b[0] + b[2] && pos[1] >= b[1] && pos[1] <= b[1] + b[3];
     }
 
     // ============================
     // 绘制
     // ============================
-    draw() {
-        const canvas = this.canvas;
-        const containerWidth = canvas.parentElement?.offsetWidth || 400;
-        const displayHeight = Math.round(containerWidth * 0.625); // 16:10 比例
+    draw(ctx, node, width, y) {
+        this.hitAreas = {};
+        const [nodeW, nodeH] = node.size;
 
-        // 设置 canvas 实际像素（用于清晰绘制）
-        const dpr = window.devicePixelRatio || 1;
-        canvas.width = containerWidth * dpr;
-        canvas.height = displayHeight * dpr;
-        canvas.style.height = displayHeight + "px";
+        // 底部预留：页码(14) + 间距(4) + 滑条(18) + 底部边距(8) = 44
+        const navTotal = this.totalPairs > 1 ? 44 : 0;
 
-        const ctx = canvas.getContext("2d");
-        ctx.scale(dpr, dpr);
-        const w = containerWidth;
-        const h = displayHeight;
+        // 图片可用高度（不含导航）
+        this.imgAreaHeight = nodeH - navTotal;
+        this.lastDrawY = y;
 
-        // 清空
-        ctx.fillStyle = "#0a0a0a";
-        ctx.fillRect(0, 0, w, h);
+        // 先画 A（完整）
+        this._drawImg(ctx, this.imgObjA, y);
 
-        if (this.loading || !this.imgA || !this.imgB) {
-            // Loading 状态
-            ctx.fillStyle = "#555";
-            ctx.font = "14px system-ui, sans-serif";
-            ctx.textAlign = "center";
-            ctx.fillText(this.loading ? "加载中..." : "等待执行...", w / 2, h / 2);
-            return;
+        // 鼠标悬停时画 B（裁剪到鼠标位置）
+        if (this.isPointerOver && this.imgObjB) {
+            this._drawImg(ctx, this.imgObjB, y, this.pointerOverPos[0]);
         }
 
-        if (this.mode === "slider") {
-            this._drawSlider(ctx, w, h);
-        } else if (this.mode === "side_by_side") {
-            this._drawSideBySide(ctx, w, h);
-        } else {
-            this._drawDifference(ctx, w, h);
+        // 底部导航
+        if (this.totalPairs > 1) {
+            this._drawNav(ctx, nodeW, this.imgAreaHeight);
         }
     }
 
-    _drawSlider(ctx, w, h) {
-        const splitX = Math.round(w * this.sliderPos);
-
-        // 计算图片绘制区域（保持比例 contain）
-        const drawA = this._fitImage(this.imgA, w, h);
-        const drawB = this._fitImage(this.imgB, w, h);
-
-        // 先画 B（完整）
-        ctx.drawImage(this.imgB, drawB.x, drawB.y, drawB.w, drawB.h);
-
-        // 再画 A（左半裁剪）
+    _drawNav(ctx, nodeW, startY) {
         ctx.save();
-        ctx.beginPath();
-        ctx.rect(0, 0, splitX, h);
-        ctx.clip();
-        ctx.drawImage(this.imgA, drawA.x, drawA.y, drawA.w, drawA.h);
-        ctx.restore();
 
-        // 分割线
-        ctx.strokeStyle = "#fff";
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.moveTo(splitX, 0);
-        ctx.lineTo(splitX, h);
-        ctx.stroke();
-
-        // 滑块手柄
-        ctx.beginPath();
-        ctx.arc(splitX, h / 2, 14, 0, Math.PI * 2);
-        ctx.fillStyle = "rgba(255,255,255,0.9)";
-        ctx.fill();
-        ctx.strokeStyle = "#535cec";
-        ctx.lineWidth = 2;
-        ctx.stroke();
-        ctx.fillStyle = "#535cec";
-        ctx.font = "bold 12px sans-serif";
+        // === 第一行：页码 ===
+        ctx.fillStyle = "#888";
+        ctx.font = "11px system-ui, sans-serif";
         ctx.textAlign = "center";
+        ctx.textBaseline = "top";
+        ctx.fillText(`${this.currentIndex + 1} / ${this.totalPairs}`, nodeW / 2, startY + 2);
+
+        // === 第二行：◀ [滑条] ▶ ===
+        const sliderY = startY + 20;
+        const sliderH = 18;
+        const midY = sliderY + sliderH / 2;
+
         ctx.textBaseline = "middle";
-        ctx.fillText("⇔", splitX, h / 2);
+        const activeColor = "#aaa";
+        const inactiveColor = "#555";
 
-        // 标签
-        this._drawLabels(ctx, w);
-    }
-
-    _drawSideBySide(ctx, w, h) {
-        const halfW = Math.floor(w / 2) - 1;
-
-        // A 在左
-        const dA = this._fitImage(this.imgA, halfW, h);
-        ctx.drawImage(this.imgA, dA.x, dA.y, dA.w, dA.h);
-
-        // 分隔线
-        ctx.fillStyle = "#3a3a5c";
-        ctx.fillRect(halfW, 0, 2, h);
-
-        // B 在右
-        ctx.save();
-        ctx.translate(halfW + 2, 0);
-        const dB = this._fitImage(this.imgB, halfW, h);
-        ctx.drawImage(this.imgB, dB.x, dB.y, dB.w, dB.h);
-        ctx.restore();
-
-        // 标签
-        this._drawLabel(ctx, this.labelA, 8, "#535cec");
-        this._drawLabel(ctx, this.labelB, halfW + 10, "#4caf50");
-    }
-
-    _drawDifference(ctx, w, h) {
-        // 先画 A
-        const dA = this._fitImage(this.imgA, w, h);
-        ctx.drawImage(this.imgA, dA.x, dA.y, dA.w, dA.h);
-
-        // 获取 A 的像素
-        const dataA = ctx.getImageData(0, 0, w * (window.devicePixelRatio || 1), h * (window.devicePixelRatio || 1));
-
-        // 画 B
-        ctx.drawImage(this.imgB, dA.x, dA.y, dA.w, dA.h);
-        const dataB = ctx.getImageData(0, 0, w * (window.devicePixelRatio || 1), h * (window.devicePixelRatio || 1));
-
-        // 计算差异
-        const pixels = dataA.data;
-        const pixelsB = dataB.data;
-        for (let i = 0; i < pixels.length; i += 4) {
-            const dr = Math.abs(pixels[i] - pixelsB[i]);
-            const dg = Math.abs(pixels[i + 1] - pixelsB[i + 1]);
-            const db = Math.abs(pixels[i + 2] - pixelsB[i + 2]);
-            const diff = Math.min(255, (dr + dg + db) * 2);
-            pixels[i] = diff;
-            pixels[i + 1] = diff > 80 ? 255 : diff * 2;
-            pixels[i + 2] = 30;
-            pixels[i + 3] = 255;
-        }
-        ctx.putImageData(dataA, 0, 0);
-
-        // DIFF 标签
-        this._drawLabel(ctx, "DIFF", 8, "#ff9800");
-    }
-
-    _fitImage(img, containerW, containerH) {
-        const imgRatio = img.naturalWidth / img.naturalHeight;
-        const containerRatio = containerW / containerH;
-        let w, h, x, y;
-        if (imgRatio > containerRatio) {
-            w = containerW;
-            h = containerW / imgRatio;
-            x = 0;
-            y = (containerH - h) / 2;
-        } else {
-            h = containerH;
-            w = containerH * imgRatio;
-            x = (containerW - w) / 2;
-            y = 0;
-        }
-        return { x, y, w, h };
-    }
-
-    _drawLabels(ctx, w) {
-        this._drawLabel(ctx, this.labelA, 8, "#535cec");
-        this._drawLabel(ctx, this.labelB, w - 8, "#4caf50", true);
-    }
-
-    _drawLabel(ctx, text, x, bgColor, alignRight = false) {
-        ctx.font = "bold 11px system-ui, sans-serif";
-        const metrics = ctx.measureText(text);
-        const padX = 8, padY = 4;
-        const textW = metrics.width;
-        const drawX = alignRight ? x - textW - padX * 2 : x;
-
-        ctx.fillStyle = bgColor;
-        ctx.globalAlpha = 0.85;
+        // 三角形箭头（左）
+        const arrowSize = 6;
+        ctx.fillStyle = this.currentIndex > 0 ? activeColor : inactiveColor;
         ctx.beginPath();
-        ctx.roundRect(drawX, 6, textW + padX * 2, 20, 4);
+        ctx.moveTo(10, midY);
+        ctx.lineTo(10 + arrowSize * 1.2, midY - arrowSize);
+        ctx.lineTo(10 + arrowSize * 1.2, midY + arrowSize);
+        ctx.closePath();
         ctx.fill();
-        ctx.globalAlpha = 1;
 
-        ctx.fillStyle = "#fff";
-        ctx.textAlign = "left";
-        ctx.textBaseline = "middle";
-        ctx.fillText(text, drawX + padX, 16);
+        // 三角形箭头（右）
+        ctx.fillStyle = this.currentIndex < this.totalPairs - 1 ? activeColor : inactiveColor;
+        ctx.beginPath();
+        ctx.moveTo(nodeW - 10, midY);
+        ctx.lineTo(nodeW - 10 - arrowSize * 1.2, midY - arrowSize);
+        ctx.lineTo(nodeW - 10 - arrowSize * 1.2, midY + arrowSize);
+        ctx.closePath();
+        ctx.fill();
+
+        // 滑条轨道
+        const trackX = 24;
+        const trackW = nodeW - 48;
+        const trackH = 4;
+        const trackY = midY - trackH / 2;
+
+        // 轨道背景
+        ctx.fillStyle = "rgba(255,255,255,0.1)";
+        ctx.beginPath();
+        ctx.roundRect(trackX, trackY, trackW, trackH, trackH / 2);
+        ctx.fill();
+
+        // 已走进度
+        const progress = this.totalPairs > 1 ? this.currentIndex / (this.totalPairs - 1) : 0;
+        const fillW = trackW * progress;
+        if (fillW > 1) {
+            const grad = ctx.createLinearGradient(trackX, 0, trackX + fillW, 0);
+            grad.addColorStop(0, "rgba(0,180,255,0.3)");
+            grad.addColorStop(1, "rgba(0,224,255,0.6)");
+            ctx.fillStyle = grad;
+            ctx.beginPath();
+            ctx.roundRect(trackX, trackY, fillW, trackH, trackH / 2);
+            ctx.fill();
+        }
+
+        // 手柄光晕
+        const handleX = trackX + fillW;
+        ctx.beginPath();
+        ctx.arc(handleX, midY, 10, 0, Math.PI * 2);
+        ctx.fillStyle = "rgba(0,224,255,0.1)";
+        ctx.fill();
+
+        // 手柄外圈
+        ctx.beginPath();
+        ctx.arc(handleX, midY, 6, 0, Math.PI * 2);
+        ctx.fillStyle = "#16213e";
+        ctx.fill();
+        ctx.strokeStyle = "rgba(0,224,255,0.7)";
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+
+        // 手柄内圆
+        ctx.beginPath();
+        ctx.arc(handleX, midY, 3, 0, Math.PI * 2);
+        ctx.fillStyle = "#00e0ff";
+        ctx.fill();
+
+        // 记住布局
+        this.navBounds = {
+            arrowY: sliderY, arrowH: sliderH,
+            trackX, trackW, nodeW,
+            fullY: startY, fullH: 44,
+        };
+
+        ctx.restore();
     }
 
-    // ============================
-    // 尺寸计算（给 ComfyUI widget 系统用）
-    // ============================
-    computeSize() {
-        const w = this.node.size[0];
-        // 画布高度 + 导航栏 + 缩略图条
-        const canvasH = Math.round(w * 0.625);
-        const navH = 34;
-        const thumbH = this.totalPairs > 1 ? 42 : 0;
-        return [w, canvasH + navH + thumbH + 8];
+    // 处理导航条点击（由节点 onMouseDown 调用）
+    handleNavClick(pos) {
+        if (!this.navBounds || this.totalPairs <= 1) return false;
+        const { arrowY, arrowH, trackX, trackW, nodeW, fullY, fullH } = this.navBounds;
+
+        // 整个导航区域
+        if (pos[1] < fullY || pos[1] > fullY + fullH) return false;
+
+        const inSliderRow = pos[1] >= arrowY && pos[1] <= arrowY + arrowH;
+
+        if (inSliderRow) {
+            // 左箭头
+            if (pos[0] < 20) {
+                this._goTo(this.currentIndex - 1);
+                return true;
+            }
+            // 右箭头
+            if (pos[0] > nodeW - 20) {
+                this._goTo(this.currentIndex + 1);
+                return true;
+            }
+            // 滑条拖动
+            if (pos[0] >= trackX && pos[0] <= trackX + trackW) {
+                const ratio = (pos[0] - trackX) / trackW;
+                this._goTo(Math.round(ratio * (this.totalPairs - 1)));
+                this.draggingNav = true;
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // 完全复制原版 SimpleImageCompare.drawImage 的逻辑
+    _drawImg(ctx, imgObj, y, cropX) {
+        if (!imgObj?.naturalWidth || !imgObj?.naturalHeight) return;
+
+        const [nodeWidth] = this.node.size;
+        // 用图片区域高度，不侵入导航区
+        const effectiveHeight = this.imgAreaHeight || this.node.size[1];
+
+        // 节点大小变化时清除缓存
+        const needsRecalc = !this.lastNodeSize ||
+            this.lastNodeSize[0] !== nodeWidth ||
+            this.lastNodeSize[1] !== effectiveHeight;
+        if (needsRecalc) {
+            this.lastNodeSize = [nodeWidth, effectiveHeight];
+            this.cachedDrawData = null;
+        }
+
+        // 缓存图像布局
+        if (!this.cachedDrawData) {
+            const refImg = this.imgObjA || imgObj;
+            const imageAspect = refImg.naturalWidth / refImg.naturalHeight;
+            const height = effectiveHeight - y;
+            const widgetAspect = nodeWidth / height;
+
+            let targetWidth, targetHeight, offsetX = 0;
+
+            if (imageAspect > widgetAspect) {
+                targetWidth = nodeWidth;
+                targetHeight = nodeWidth / imageAspect;
+            } else {
+                targetHeight = height;
+                targetWidth = height * imageAspect;
+                offsetX = (nodeWidth - targetWidth) / 2;
+            }
+
+            this.cachedDrawData = {
+                targetWidth,
+                targetHeight,
+                offsetX,
+                widthMultiplier: refImg.naturalWidth / targetWidth,
+                destX: (nodeWidth - targetWidth) / 2,
+                destY: y + (height - targetHeight) / 2,
+            };
+        }
+
+        const { targetWidth, targetHeight, offsetX, widthMultiplier, destX, destY } = this.cachedDrawData;
+
+        // 计算裁剪区域（和原版完全一致）
+        const sourceX = 0;
+        const sourceY = 0;
+        const sourceWidth = cropX != null ? (cropX - offsetX) * widthMultiplier : imgObj.naturalWidth;
+        const sourceHeight = imgObj.naturalHeight;
+        const destWidth = cropX != null ? cropX - offsetX : targetWidth;
+        const destHeight = targetHeight;
+
+        ctx.save();
+        ctx.beginPath();
+
+        // 和原版一致：cropX truthy 检查（cropX=0 时不 clip）
+        if (cropX) {
+            ctx.rect(destX, destY, destWidth, destHeight);
+            ctx.clip();
+        }
+
+        ctx.drawImage(
+            imgObj,
+            sourceX, sourceY, sourceWidth, sourceHeight,
+            destX, destY, destWidth, destHeight
+        );
+
+        // 分界线（和原版完全一致：difference 混合模式）
+        if (cropX != null && cropX >= (nodeWidth - targetWidth) / 2 && cropX <= targetWidth + offsetX) {
+            ctx.beginPath();
+            ctx.moveTo(cropX, destY);
+            ctx.lineTo(cropX, destY + destHeight);
+            ctx.globalCompositeOperation = "difference";
+            ctx.strokeStyle = "rgba(255,255,255, 1)";
+            ctx.stroke();
+        }
+
+        ctx.restore();
+    }
+
+    computeSize(width) {
+        return [width, 20];
+    }
+
+    serializeValue() {
+        return {};
     }
 }
 
 // ============================
-// 注册 ComfyUI 扩展
+// 注册
 // ============================
 app.registerExtension({
     name: "comfyui.image_compare",
 
-    async beforeRegisterNodeDef(nodeType, nodeData) {
+    async beforeRegisterNodeDef(nodeType, nodeData, app) {
         if (nodeData.name !== "IS_ImageCompare") return;
 
-        // 在节点执行完成后接收图片 URL 并渲染对比
-        const origOnExecuted = nodeType.prototype.onExecuted;
-        nodeType.prototype.onExecuted = function (message) {
-            origOnExecuted?.apply(this, arguments);
+        // onNodeCreated
+        const onNodeCreated = nodeType.prototype.onNodeCreated;
+        nodeType.prototype.onNodeCreated = function () {
+            const r = onNodeCreated ? onNodeCreated.apply(this, arguments) : undefined;
 
-            const urlsA = message.images_a;
-            const urlsB = message.images_b;
-            const mode = message.mode || "slider";
-            const labelA = message.label_a || "A";
-            const labelB = message.label_b || "B";
+            this.serialize_widgets = true;
+            const widget = new ImageCompareWidget(this);
+            this.addCustomWidget(widget);
+            this.setSize(this.computeSize());
 
-            if (!urlsA || !urlsB || urlsA.length === 0 || urlsB.length === 0) return;
+            return r;
+        };
 
-            // 初始化或获取已有的 widget
-            if (!this._compareWidget) {
-                const widget = new ImageCompareWidget(this);
-                // 添加为 ComfyUI DOM widget
-                this._compareWidget = this.addDOMWidget(
-                    "compare_view",
-                    "custom",
-                    widget.element,
-                    {
-                        serialize: false,
-                        getMinHeight: () => {
-                            return widget.computeSize()[1];
-                        },
-                    }
-                );
-                this._compareWidget._widget = widget;
+        // onMouseEnter
+        const origMouseEnter = nodeType.prototype.onMouseEnter;
+        nodeType.prototype.onMouseEnter = function (event) {
+            const r = origMouseEnter ? origMouseEnter.apply(this, arguments) : undefined;
+            const w = this.widgets?.find(w => w instanceof ImageCompareWidget);
+            if (w) w.onMouseEnter(event);
+            return r;
+        };
 
-                // 监听节点大小变化重绘
-                const origOnResize = this.onResize;
-                this.onResize = function () {
-                    origOnResize?.apply(this, arguments);
-                    widget.draw();
-                };
-            }
+        // onMouseLeave
+        const origMouseLeave = nodeType.prototype.onMouseLeave;
+        nodeType.prototype.onMouseLeave = function (event) {
+            const r = origMouseLeave ? origMouseLeave.apply(this, arguments) : undefined;
+            const w = this.widgets?.find(w => w instanceof ImageCompareWidget);
+            if (w) w.onMouseLeave(event);
+            return r;
+        };
 
-            // 更新数据
-            this._compareWidget._widget.setData(urlsA, urlsB, mode, labelA, labelB);
+        // onMouseDown（处理底部导航条点击）
+        const origMouseDown = nodeType.prototype.onMouseDown;
+        nodeType.prototype.onMouseDown = function (event, pos, canvas) {
+            const w = this.widgets?.find(w => w instanceof ImageCompareWidget);
+            if (w && w.handleNavClick(pos)) return true;
+            return origMouseDown ? origMouseDown.apply(this, arguments) : undefined;
+        };
+
+        // onMouseMove
+        const origMouseMove = nodeType.prototype.onMouseMove;
+        nodeType.prototype.onMouseMove = function (event, pos, canvas) {
+            const r = origMouseMove ? origMouseMove.apply(this, arguments) : undefined;
+            const w = this.widgets?.find(w => w instanceof ImageCompareWidget);
+            if (w) w.onMouseMove(event, pos, canvas);
+            return r;
+        };
+
+        // onExecuted
+        const origExecuted = nodeType.prototype.onExecuted;
+        nodeType.prototype.onExecuted = function (output) {
+            const r = origExecuted ? origExecuted.apply(this, arguments) : undefined;
+            const w = this.widgets?.find(w => w instanceof ImageCompareWidget);
+            if (w && output) w.onExecuted(output);
+            return r;
         };
     },
 
     async nodeCreated(node) {
-        if (node.comfyClass === "IS_ImageCompare") {
-            node.color = "#1a1a2e";
-            node.bgcolor = "#16213e";
-            // 设置初始大小
-            node.size = [400, 340];
-        }
+        if (node.comfyClass !== "IS_ImageCompare") return;
+        node.color = "#1a1a2e";
+        node.bgcolor = "#16213e";
     },
 });

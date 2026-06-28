@@ -303,7 +303,7 @@ NODE_CLASS_MAPPINGS = {
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "ImageSelector": "🖼️ Image Selector | 图片选择器",
+    "ImageSelector": "Image Selector | 图片选择器",
     **SAVE_DISPLAY_MAPPINGS,
     **COMPARE_DISPLAY_MAPPINGS,
 }
