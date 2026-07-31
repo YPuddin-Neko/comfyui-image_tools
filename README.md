@@ -1,6 +1,6 @@
 # 🛠️ ComfyUI Image Tools | 图片工具箱
 
-一个 ComfyUI 自定义节点插件(代码均为AI生成)，包含图片选择器、图片对比和增强版图片保存等实用工具。
+一个 ComfyUI 自定义节点插件(代码均为AI生成)，包含图片选择器、图片对比、潜空间生成器和增强版图片保存等实用工具。
 
 ## 🖼️ 例图
 
@@ -40,6 +40,16 @@
 - **元数据智能收集** - 四级降级策略：手动传入 → 直接输入 → 自动解析节点 → 提取文本
 - **子工作流兼容** - 在 Group Node（子工作流）中也能正常保存图片
 - **广泛的种子读取** - 支持标准 KSampler、Easy-use、Efficiency、Impact 等多种采样器节点的种子提取
+
+### 潜空间生成器
+
+> 📌 种子控制 UI 参考自 [rgthree-comfy](https://github.com/rgthree/rgthree-comfy)。
+
+- **全模型兼容** - 输出全零 latent，KSampler 自动匹配模型通道数（SD/SDXL/FLUX/SD3 通用）
+- **种子控制** - Canvas 绘制三按钮：🎲 每次随机 / 🎲 新固定随机 / ♻️ 使用上次种子
+- **种子回收** - 执行后「使用上次种子」按钮自动亮起并显示实际种子值
+- **单独 SEED 输出** - SEED 作为独立 INT 输出端，方便接线到其他节点
+- **零延迟交互** - 按钮使用 Canvas 绘制 + onMouseDown 直接处理，无 DOM 延迟
 
 ## 📦 安装
 
@@ -81,6 +91,14 @@ git clone https://github.com/YPuddin-Neko/comfyui-image_tools
 4. 设置文件名前缀（支持占位符）、保存格式和质量
 5. 运行工作流，图片自动保存到 ComfyUI 输出目录
 
+### 潜空间生成器
+
+1. 右键画布 → 添加节点 → `latent/noise` → `潜空间生成器`
+2. 设置宽度、高度和批量大小
+3. 点击底部按钮选择种子模式（🎲 每次随机 / 🎲 新固定随机 / ♻️ 使用上次种子）
+4. 连接 LATENT 输出到 KSampler，SEED 输出可接到其他节点
+5. 兼容所有模型（SD/SDXL/FLUX/SD3），无需手动选择通道数
+
 ## 📸 节点参数
 
 ### Image Selector
@@ -94,7 +112,7 @@ git clone https://github.com/YPuddin-Neko/comfyui-image_tools
 
 **输出端**：`images`（IMAGE 类型）- 用户选中的图片
 
-### 🔍 Image Compare
+### Image Compare
 
 | 参数 | 类型 | 说明 |
 |------|------|------|
@@ -103,7 +121,18 @@ git clone https://github.com/YPuddin-Neko/comfyui-image_tools
 
 **输出端**：`images_a`（IMAGE）、`images_b`（IMAGE）- 直通输出原始图片
 
-### 💾 Save Image Plus
+### 潜空间生成器
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| seed | INT | 0 | 种子值（-1 = 每次随机） |
+| width | INT | 1024 | 宽度（步长 8） |
+| height | INT | 1024 | 高度（步长 8） |
+| batch_size | INT | 1 | 批量大小 |
+
+**输出端**：`LATENT`（全零潜空间，KSampler 自动匹配通道）、`SEED`（INT）- 实际使用的种子值
+
+### Save Image Plus
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
@@ -153,11 +182,13 @@ comfyui-image_tools/
 ├── __init__.py              # 插件入口
 ├── nodes.py                 # 图片选择器节点 & 后端逻辑
 ├── image_compare.py         # 图片对比节点
+├── noisy_latent.py          # 潜空间生成器节点
 ├── save_image_plus.py       # 保存图像增强版节点
 ├── web/
 │   └── js/
 │       ├── imageSelector.js # 图片选择器前端 UI
-│       └── imageCompare.js  # 图片对比前端 UI
+│       ├── imageCompare.js  # 图片对比前端 UI
+│       └── noisyLatent.js   # 潜空间生成器种子控制 UI
 ├── sound/
 │   └── din.wav              # 提示音文件
 ├── pyproject.toml           # 项目配置

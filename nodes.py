@@ -295,15 +295,20 @@ from .save_image_plus import NODE_CLASS_MAPPINGS as SAVE_CLASS_MAPPINGS
 from .save_image_plus import NODE_DISPLAY_NAME_MAPPINGS as SAVE_DISPLAY_MAPPINGS
 from .image_compare import NODE_CLASS_MAPPINGS as COMPARE_CLASS_MAPPINGS
 from .image_compare import NODE_DISPLAY_NAME_MAPPINGS as COMPARE_DISPLAY_MAPPINGS
+from .noisy_latent import NODE_CLASS_MAPPINGS as NOISY_CLASS_MAPPINGS
+from .noisy_latent import NODE_DISPLAY_NAME_MAPPINGS as NOISY_DISPLAY_MAPPINGS
 
 NODE_CLASS_MAPPINGS = {
     "ImageSelector": ImageSelector,
     **SAVE_CLASS_MAPPINGS,
     **COMPARE_CLASS_MAPPINGS,
+    **NOISY_CLASS_MAPPINGS,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "ImageSelector": "Image Selector | 图片选择器",
     **SAVE_DISPLAY_MAPPINGS,
     **COMPARE_DISPLAY_MAPPINGS,
+    **NOISY_DISPLAY_MAPPINGS,
 }
+
