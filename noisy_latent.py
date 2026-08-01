@@ -17,7 +17,7 @@ class NoisyLatentImage:
         return {
             "required": {
                 "seed": ("INT", {
-                    "default": 0,
+                    "default": -1,
                     "min": -1,
                     "max": 0xffffffffffffffff,
                 }),

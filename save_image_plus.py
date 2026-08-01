@@ -267,7 +267,7 @@ class SaveImagePlus:
                     for field in seed_fields:
                         if field in inputs:
                             resolved = self._resolve_value(actual_prompt, inputs[field])
-                            if isinstance(resolved, (int, float)):
+                            if isinstance(resolved, (int, float)) and int(resolved) >= 0:
                                 return int(resolved)
 
         # 第二轮：查找全局种子节点（如 easy globalSeed, Seed 等）
@@ -283,7 +283,7 @@ class SaveImagePlus:
                     for field in seed_fields + ['value', 'Value']:
                         if field in inputs:
                             resolved = self._resolve_value(actual_prompt, inputs[field])
-                            if isinstance(resolved, (int, float)):
+                            if isinstance(resolved, (int, float)) and int(resolved) >= 0:
                                 return int(resolved)
 
         # 第三轮：查找任何包含 seed 的节点
@@ -293,7 +293,7 @@ class SaveImagePlus:
                 for field in seed_fields:
                     if field in inputs:
                         resolved = self._resolve_value(actual_prompt, inputs[field])
-                        if isinstance(resolved, (int, float)):
+                        if isinstance(resolved, (int, float)) and int(resolved) >= 0:
                             return int(resolved)
 
         return None
@@ -493,7 +493,7 @@ class SaveImagePlus:
                     for field in ["seed", "noise_seed", "seed_num"]:
                         if field in inputs:
                             val = self._resolve_value(actual_prompt, inputs[field])
-                            if isinstance(val, (int, float)):
+                            if isinstance(val, (int, float)) and int(val) >= 0:
                                 result["seed"] = int(val)
                                 break
                 if result["cfg_scale"] is None and "cfg" in inputs:

@@ -1,13 +1,14 @@
 [project]
-name = "comfyui-image-selector"
-description = "ComfyUI 图片选择器节点 - 在工作流执行时弹出图片选择窗口，支持单选/多选"
-version = "1.0.0"
+name = "comfyui-image-tools"
+description = "ComfyUI 图片工具箱 - 图片选择器、图片对比、潜空间生成器、保存图像增强版、性能监控"
+version = "1.1.0"
 license = "MIT"
+dependencies = ["psutil"]
 
 [project.urls]
-Repository = "https://github.com/your-username/comfyui-image_selete"
+Repository = "https://github.com/YPuddin-Neko/comfyui-image_tools"
 
 [tool.comfy]
 PublisherId = ""
-DisplayName = "Image Selector"
+DisplayName = "Image Tools | 图片工具箱"
 Icon = ""

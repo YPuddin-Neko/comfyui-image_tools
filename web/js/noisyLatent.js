@@ -56,6 +56,7 @@ app.registerExtension({
 
             // 状态
             node._lastQueuedSeed = null;
+            node._autoRandomize = true;  // 默认每次随机
             node._hoverBtn = -1;
             node._btnLabels = BUTTONS.map(b => b.label);
             node._btnAreaH = BUTTONS.length * (BTN_HEIGHT + BTN_GAP) + BTN_PAD_Y * 2;
@@ -128,10 +129,14 @@ app.registerExtension({
                     const btn = BUTTONS[btnIdx];
 
                     if (btn.id === "randomize") {
-                        seedWidget.value = -1;
+                        // 标记自动随机模式，立即生成一个随机 seed
+                        this._autoRandomize = true;
+                        seedWidget.value = Math.floor(Math.random() * MAX_SEED);
                     } else if (btn.id === "fixed_random") {
+                        this._autoRandomize = false;
                         seedWidget.value = Math.floor(Math.random() * MAX_SEED);
                     } else if (btn.id === "last_seed" && this._lastQueuedSeed != null) {
+                        this._autoRandomize = false;
                         seedWidget.value = this._lastQueuedSeed;
                     }
                     this.setDirtyCanvas(true, true);
@@ -188,6 +193,15 @@ app.registerExtension({
                     const seed = Array.isArray(output.SEED) ? output.SEED[0] : output.SEED;
                     node._lastQueuedSeed = seed;
                     node._btnLabels[2] = `♻️ 使用上次种子 (${seed})`;
+
+                    // 如果是自动随机模式，为下一次执行生成新 seed
+                    if (node._autoRandomize) {
+                        const seedWidget = node.widgets?.find(w => w.name === "seed");
+                        if (seedWidget) {
+                            seedWidget.value = Math.floor(Math.random() * MAX_SEED);
+                        }
+                    }
+
                     node.setDirtyCanvas(true, false);
                 }
             });

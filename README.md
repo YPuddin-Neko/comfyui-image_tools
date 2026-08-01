@@ -1,6 +1,6 @@
 # 🛠️ ComfyUI Image Tools | 图片工具箱
 
-一个 ComfyUI 自定义节点插件(代码均为AI生成)，包含图片选择器、图片对比、潜空间生成器和增强版图片保存等实用工具。
+一个 ComfyUI 自定义节点插件(代码均为AI生成)，包含图片选择器、图片对比、潜空间生成器、增强版图片保存和性能监控等实用工具。
 
 ## 🖼️ 例图
 
@@ -50,6 +50,19 @@
 - **种子回收** - 执行后「使用上次种子」按钮自动亮起并显示实际种子值
 - **单独 SEED 输出** - SEED 作为独立 INT 输出端，方便接线到其他节点
 - **零延迟交互** - 按钮使用 Canvas 绘制 + onMouseDown 直接处理，无 DOM 延迟
+- **真实种子传递** - 自动随机模式下，实际使用的种子值会正确写回节点并传递到下游保存节点的元数据中
+
+### Performance Monitor | 性能监控
+
+- **菜单栏嵌入** - 通过 ComfyUI 官方 API（ComfyButtonGroup）注入顶部菜单栏，与 Crystools 等插件并排显示
+- **全平台支持** - 支持 NVIDIA GPU（NVML）、Apple Silicon（MPS + IOReport 功率）、纯 CPU 环境
+- **丰富监控项** - CPU / RAM / Swap / GPU / VRAM / 温度 / 功率 / 硬盘使用率
+- **VRAM 详细信息** - 鼠标悬停显示驱动层用量、PyTorch 已分配、PyTorch 缓存池
+- **Apple Silicon 功率** - 通过 IOReport 读取 GPU / CPU / SoC 实时功耗
+- **双行显示** - 可选双行 Grid 布局，固定列宽对齐 + 竖列分隔线
+- **自定义排序** - 支持自定义各监控项的显示顺序（如 CPU 和 GPU 放在同一竖列）
+- **原生设置面板** - 所有配置项注册到 ComfyUI 原生设置面板，支持开关各监控项、调整刷新频率
+- **多 GPU / 多分区** - 支持选择指定 GPU 索引和硬盘分区
 
 ## 📦 安装
 
@@ -98,6 +111,15 @@ git clone https://github.com/YPuddin-Neko/comfyui-image_tools
 3. 点击底部按钮选择种子模式（🎲 每次随机 / 🎲 新固定随机 / ♻️ 使用上次种子）
 4. 连接 LATENT 输出到 KSampler，SEED 输出可接到其他节点
 5. 兼容所有模型（SD/SDXL/FLUX/SD3），无需手动选择通道数
+
+### 性能监控
+
+性能监控自动嵌入 ComfyUI 顶部菜单栏，无需手动操作。
+
+1. 安装插件后重启 ComfyUI，监控条自动显示在菜单栏中
+2. 打开 ComfyUI 设置面板 → 搜索 "ImageTools" 即可看到所有监控相关设置
+3. 可开关各监控项（CPU/RAM/GPU 等）、切换双行显示、调整显示顺序
+4. 鼠标悬停监控项可查看详细信息（如 VRAM 的 PyTorch 分配详情、功率百分比等）
 
 ## 📸 节点参数
 
@@ -184,11 +206,13 @@ comfyui-image_tools/
 ├── image_compare.py         # 图片对比节点
 ├── noisy_latent.py          # 潜空间生成器节点
 ├── save_image_plus.py       # 保存图像增强版节点
+├── monitor.py               # 性能监控后端（系统信息采集、WebSocket 推送）
 ├── web/
 │   └── js/
 │       ├── imageSelector.js # 图片选择器前端 UI
 │       ├── imageCompare.js  # 图片对比前端 UI
-│       └── noisyLatent.js   # 潜空间生成器种子控制 UI
+│       ├── noisyLatent.js   # 潜空间生成器种子控制 UI
+│       └── monitor.js       # 性能监控前端 UI（菜单栏嵌入）
 ├── sound/
 │   └── din.wav              # 提示音文件
 ├── pyproject.toml           # 项目配置
