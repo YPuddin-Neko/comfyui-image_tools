@@ -9,6 +9,13 @@ import { ComfyButtonGroup } from "../../scripts/ui/components/buttonGroup.js";
 
 const GB = 1073741824;
 const fmtGB = (b) => (b ? (b / GB).toFixed(1) : "0.0");
+const clampPercent = (value) => Math.max(0, Math.min(100, Number(value) || 0));
+const fmtPercent = (value) => `${clampPercent(value).toFixed(0)}%`;
+const DEFAULT_DISPLAY_ORDER = "cpu,ram,swap,gpu,vram,mps,temp,pwr,disk";
+const normalizeDisplayOrder = (value) => String(value || DEFAULT_DISPLAY_ORDER)
+    .split(",")
+    .map((item) => item.trim().toLowerCase() === "hdd" ? "disk" : item.trim())
+    .join(",");
 
 // ==================== 全局状态 ====================
 let monitorEl = null;
@@ -26,11 +33,11 @@ const cfg = {
     showVram: true,
     showTemp: true,
     showPwr: true,
-    showHdd: true,
+    showDisk: true,
     gpuIndex: -1,
     numbersOnly: false,
     dualRow: false,
-    displayOrder: "cpu,ram,swap,gpu,vram,mps,temp,pwr,hdd",
+    displayOrder: DEFAULT_DISPLAY_ORDER,
 };
 
 // ==================== 样式 ====================
@@ -99,7 +106,7 @@ function injectStyles() {
 .it-c-vram { background: #a18cd1; }
 .it-c-temp { background: #ff6b6b; }
 .it-c-pwr  { background: #f7971e; }
-.it-c-hdd  { background: #8e8e8e; }
+.it-c-disk { background: #8e8e8e; }
 .it-c-mps  { background: #ff6b6b; }
 /* 进度条填充 */
 .it-f-cpu  { background: linear-gradient(90deg, #4facfe, #00f2fe); }
@@ -109,7 +116,7 @@ function injectStyles() {
 .it-f-vram { background: linear-gradient(90deg, #a18cd1, #fbc2eb); }
 .it-f-temp { background: linear-gradient(90deg, #ff9a9e, #fad0c4); }
 .it-f-pwr  { background: linear-gradient(90deg, #f7971e, #ffd200); }
-.it-f-hdd  { background: linear-gradient(90deg, #bbb, #888); }
+.it-f-disk { background: linear-gradient(90deg, #bbb, #888); }
 .it-f-mps  { background: linear-gradient(90deg, #ff6b6b, #ee5a24); }
 .it-f-warn { background: linear-gradient(90deg, #f5576c, #ff6b6b) !important; }
 /* Tooltip - 向下显示 */
@@ -253,7 +260,7 @@ function updateMonitor(data) {
     if (gi >= 0) gpus = gpus.filter(g => g.index === gi);
 
     // 构建布局 key
-    const key = `${p}_${gi}_${gpus.length}_${cfg.showCpu}_${cfg.showRam}_${cfg.showSwap}_${cfg.showGpu}_${cfg.showVram}_${cfg.showTemp}_${cfg.showPwr}_${cfg.showHdd}_${cfg.numbersOnly}_${cfg.dualRow}_${cfg.displayOrder}`;
+    const key = `${p}_${gi}_${gpus.length}_${cfg.showCpu}_${cfg.showRam}_${cfg.showSwap}_${cfg.showGpu}_${cfg.showVram}_${cfg.showTemp}_${cfg.showPwr}_${cfg.showDisk}_${cfg.numbersOnly}_${cfg.dualRow}_${cfg.displayOrder}`;
 
     if (lastLayoutKey !== key) {
         lastLayoutKey = key;
@@ -278,10 +285,10 @@ function updateMonitor(data) {
         }
         // Apple Silicon
         if (p === "apple_silicon" && gpus.length > 0) {
-            allItems.push({key: "mps", color: "it-c-mps", label: "MPS", fill: "it-f-mps"});
+            if (cfg.showVram) allItems.push({key: "mps", color: "it-c-mps", label: "MPS", fill: "it-f-mps"});
             if (cfg.showPwr && gpus[0].power_draw >= 0) allItems.push({key: "pwr_apple", color: "it-c-pwr", label: "PWR", fill: "it-f-pwr", sortKey: "pwr"});
         }
-        if (cfg.showHdd) allItems.push({key: "hdd", color: "it-c-hdd", label: "HDD", fill: "it-f-hdd"});
+        if (cfg.showDisk) allItems.push({key: "disk", color: "it-c-disk", label: "DISK", fill: "it-f-disk"});
 
         // Sort by displayOrder
         const order = cfg.displayOrder.split(",").map(s => s.trim());
@@ -308,32 +315,32 @@ function updateMonitor(data) {
 
     // 数值更新
     if (cfg.showCpu)
-        updateItem("cpu", data.cpu_percent, `${(data.cpu_percent || 0).toFixed(0)}%`);
+        updateItem("cpu", data.cpu_percent, fmtPercent(data.cpu_percent));
 
     if (cfg.showRam)
         updateItem("ram", data.ram_percent,
-            `${(data.ram_percent || 0).toFixed(0)}%`,
+            fmtPercent(data.ram_percent),
             `已用 ${fmtGB(data.ram_used)} / ${fmtGB(data.ram_total)} GB`);
 
     if (cfg.showSwap && data.swap_total > 0)
         updateItem("swap", data.swap_percent,
-            `${(data.swap_percent || 0).toFixed(0)}%`,
+            fmtPercent(data.swap_percent),
             `已用 ${fmtGB(data.swap_used)} / ${fmtGB(data.swap_total)} GB`);
 
     if (p === "nvidia") {
         for (const gpu of gpus) {
             const i = gpu.index;
             if (cfg.showGpu)
-                updateItem(`gpu${i}`, gpu.gpu_percent, `${gpu.gpu_percent || 0}%`, gpu.name);
+                updateItem(`gpu${i}`, gpu.gpu_percent, fmtPercent(gpu.gpu_percent), gpu.name);
             if (cfg.showVram) {
                 // 详细 VRAM tooltip: 驱动层 + PyTorch allocated + reserved
-                let vramTip = `驱动: ${fmtGB(gpu.vram_used)} / ${fmtGB(gpu.vram_total)} GB`;
+                let vramTip = `占用: ${fmtPercent(gpu.vram_percent)}\n驱动: ${fmtGB(gpu.vram_used)} / ${fmtGB(gpu.vram_total)} GB`;
                 if (gpu.torch_allocated >= 0)
                     vramTip += `\nPyTorch 已分配: ${fmtGB(gpu.torch_allocated)} GB`;
                 if (gpu.torch_reserved >= 0)
                     vramTip += `\nPyTorch 缓存池: ${fmtGB(gpu.torch_reserved)} GB`;
                 updateItem(`vram${i}`, gpu.vram_percent,
-                    `${fmtGB(gpu.vram_used)}G`,
+                    fmtPercent(gpu.vram_percent),
                     vramTip);
             }
             if (cfg.showTemp && gpu.temperature >= 0)
@@ -341,29 +348,34 @@ function updateMonitor(data) {
             if (cfg.showPwr && gpu.power_draw >= 0) {
                 const pwrPct = gpu.power_limit > 0 ? (gpu.power_draw / gpu.power_limit) * 100 : 0;
                 const pwrTip = gpu.power_limit > 0
-                    ? `${gpu.power_draw}W / ${gpu.power_limit}W (${pwrPct.toFixed(0)}%)`
+                    ? `${gpu.power_draw}W / ${gpu.power_limit}W (${fmtPercent(pwrPct)})`
                     : `${gpu.power_draw}W`;
-                updateItem(`pwr${i}`, pwrPct, `${gpu.power_draw}W`, pwrTip);
+                updateItem(`pwr${i}`, pwrPct, fmtPercent(pwrPct), pwrTip);
             }
         }
     } else if (p === "apple_silicon" && gpus.length > 0) {
         const gpu = gpus[0];
         const mps = gpu.mps_allocated || 0;
         const pct = data.ram_total ? (mps / data.ram_total) * 100 : 0;
-        updateItem("mps", pct, `${fmtGB(mps)} GB`,
-            `已分配: ${fmtGB(gpu.mps_allocated)} GB / 驱动: ${fmtGB(gpu.mps_driver)} GB`);
+        if (cfg.showVram) {
+            updateItem("mps", pct, fmtPercent(pct),
+                `统一内存占用: ${fmtPercent(pct)}\n已分配: ${fmtGB(gpu.mps_allocated)} GB\n驱动: ${fmtGB(gpu.mps_driver)} GB`);
+        }
         if (cfg.showPwr && gpu.power_draw >= 0) {
-            let pwrTip = `GPU: ${gpu.power_draw}W`;
+            const pwrPct = gpu.package_power > 0
+                ? (gpu.power_draw / gpu.package_power) * 100
+                : 0;
+            let pwrTip = `GPU 占 SoC: ${fmtPercent(pwrPct)}\nGPU: ${gpu.power_draw}W`;
             if (gpu.cpu_power >= 0) pwrTip += `\nCPU: ${gpu.cpu_power}W`;
             if (gpu.package_power >= 0) pwrTip += `\nSoC 总功耗: ${gpu.package_power}W`;
-            updateItem("pwr_apple", 0, `${gpu.power_draw}W`, pwrTip);
+            updateItem("pwr_apple", pwrPct, fmtPercent(pwrPct), pwrTip);
         }
     }
 
-    if (cfg.showHdd)
-        updateItem("hdd", data.hdd_percent,
-            `${(data.hdd_percent || 0).toFixed(0)}%`,
-            `已用 ${fmtGB(data.hdd_used)} / ${fmtGB(data.hdd_total)} GB`);
+    if (cfg.showDisk)
+        updateItem("disk", data.hdd_percent,
+            fmtPercent(data.hdd_percent),
+            `占用: ${fmtPercent(data.hdd_percent)}\n已用 ${fmtGB(data.hdd_used)} / ${fmtGB(data.hdd_total)} GB`);
 }
 
 // ==================== 设置变更回调 ====================
@@ -415,10 +427,10 @@ app.registerExtension({
         {
             id: "ImageTools.Monitor.DisplayOrder",
             name: "显示顺序",
-            tooltip: "用英文逗号分隔，可用项: cpu, ram, swap, gpu, vram, mps, temp, pwr, hdd。前后顺序决定显示位置，双行模式下相邻两项在同一竖列",
+            tooltip: "用英文逗号分隔，可用项: cpu, ram, swap, gpu, vram, mps, temp, pwr, disk。前后顺序决定显示位置，双行模式下相邻两项在同一竖列",
             type: "text",
-            defaultValue: "cpu,ram,swap,gpu,vram,mps,temp,pwr,hdd",
-            onChange: (v) => { cfg.displayOrder = v; onSettingChange(); },
+            defaultValue: DEFAULT_DISPLAY_ORDER,
+            onChange: (v) => { cfg.displayOrder = normalizeDisplayOrder(v); onSettingChange(); },
         },
         {
             id: "ImageTools.Monitor.RefreshRate",
@@ -486,10 +498,10 @@ app.registerExtension({
         },
         {
             id: "ImageTools.Hardware.HDD",
-            name: "硬盘使用率",
+            name: "DISK 磁盘使用率",
             type: "boolean",
             defaultValue: true,
-            onChange: (v) => { cfg.showHdd = v; onSettingChange(); },
+            onChange: (v) => { cfg.showDisk = v; onSettingChange(); },
         },
     ],
 
@@ -508,7 +520,13 @@ app.registerExtension({
         cfg.enabled = get("ImageTools.Monitor.Enabled", true);
         cfg.numbersOnly = get("ImageTools.Monitor.NumbersOnly", false);
         cfg.dualRow = get("ImageTools.Monitor.DualRow", false);
-        cfg.displayOrder = get("ImageTools.Monitor.DisplayOrder", "cpu,ram,swap,gpu,vram,mps,temp,pwr,hdd");
+        const savedDisplayOrder = get("ImageTools.Monitor.DisplayOrder", DEFAULT_DISPLAY_ORDER);
+        cfg.displayOrder = normalizeDisplayOrder(savedDisplayOrder);
+        if (savedDisplayOrder !== cfg.displayOrder) {
+            Promise.resolve(
+                app.extensionManager.setting.set("ImageTools.Monitor.DisplayOrder", cfg.displayOrder)
+            ).catch(() => {});
+        }
         cfg.showCpu = get("ImageTools.Hardware.CPU", true);
         cfg.showRam = get("ImageTools.Hardware.RAM", true);
         cfg.showSwap = get("ImageTools.Hardware.Swap", true);
@@ -516,7 +534,7 @@ app.registerExtension({
         cfg.showVram = get("ImageTools.Hardware.VRAM", true);
         cfg.showTemp = get("ImageTools.Hardware.Temperature", true);
         cfg.showPwr = get("ImageTools.Hardware.Power", true);
-        cfg.showHdd = get("ImageTools.Hardware.HDD", true);
+        cfg.showDisk = get("ImageTools.Hardware.HDD", true);
 
         if (!cfg.enabled && monitorEl) {
             monitorEl.style.display = "none";

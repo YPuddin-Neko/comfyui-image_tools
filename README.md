@@ -29,7 +29,7 @@
 
 ### Save Image Plus | 保存图像增强版
 
-> 📌 此节点的图片保存功能移植自 [ComfyUI-Danbooru-Gallery](https://github.com/Aaalice233/ComfyUI-Danbooru-Gallery) 的 SaveImagePlus 节点，在此基础上进行了独立实现和改进（移除外部依赖、增强种子读取兼容性、修复子工作流保存等）。感谢原作者的工作！
+> 📌 此节点的图片保存功能移植自 [ComfyUI-Danbooru-Gallery](https://github.com/Aaalice233/ComfyUI-Danbooru-Gallery) 的 SaveImagePlus 节点，在此基础上进行了独立实现和改进（内置 ComfyUI 0.29 执行期参数收集、独立哈希计算、修复子工作流保存等）。感谢原作者的工作！
 
 - **多格式保存** - 支持 PNG / JPEG / WEBP 三种格式
 - **A1111 元数据** - 自动生成 A1111 格式的元数据（提示词、生成参数、模型信息等）
@@ -37,7 +37,7 @@
 - **文件名占位符** - 支持 `%date:yyyyMMdd%`、`%seed%`、`%model%` 动态文件名
 - **工作流嵌入** - PNG 格式可嵌入完整 ComfyUI 工作流数据
 - **纯净副本** - 可额外保存无元数据的纯净图片副本
-- **元数据智能收集** - 四级降级策略：手动传入 → 直接输入 → 自动解析节点 → 提取文本
+- **元数据智能收集** - 五级降级策略：手动传入 → 直接输入 → 执行期真实参数 → prompt 字面量兜底 → 提取文本
 - **子工作流兼容** - 在 Group Node（子工作流）中也能正常保存图片
 - **广泛的种子读取** - 支持标准 KSampler、Easy-use、Efficiency、Impact 等多种采样器节点的种子提取
 
@@ -54,15 +54,15 @@
 
 ### Performance Monitor | 性能监控
 
-- **菜单栏嵌入** - 通过 ComfyUI 官方 API（ComfyButtonGroup）注入顶部菜单栏，与 Crystools 等插件并排显示
 - **全平台支持** - 支持 NVIDIA GPU（NVML）、Apple Silicon（MPS + IOReport 功率）、纯 CPU 环境
-- **丰富监控项** - CPU / RAM / Swap / GPU / VRAM / 温度 / 功率 / 硬盘使用率
+- **丰富监控项** - CPU / RAM / Swap / GPU / VRAM / 温度 / 功率 / DISK 磁盘使用率
+- **百分比主视图** - VRAM / MPS / 功率 / DISK 在菜单栏统一显示百分比，GB 与瓦数保留在悬停详情中
 - **VRAM 详细信息** - 鼠标悬停显示驱动层用量、PyTorch 已分配、PyTorch 缓存池
-- **Apple Silicon 功率** - 通过 IOReport 读取 GPU / CPU / SoC 实时功耗
+- **Apple Silicon 功率** - 通过 IOReport 读取 GPU / CPU / SoC 实时功耗，主栏显示 GPU 占 SoC 总功耗的比例
 - **双行显示** - 可选双行 Grid 布局，固定列宽对齐 + 竖列分隔线
 - **自定义排序** - 支持自定义各监控项的显示顺序（如 CPU 和 GPU 放在同一竖列）
 - **原生设置面板** - 所有配置项注册到 ComfyUI 原生设置面板，支持开关各监控项、调整刷新频率
-- **多 GPU / 多分区** - 支持选择指定 GPU 索引和硬盘分区
+- **多 GPU / 多分区** - 支持选择指定 GPU 索引和磁盘分区
 
 ## 📦 安装
 
@@ -206,6 +206,7 @@ comfyui-image_tools/
 ├── image_compare.py         # 图片对比节点
 ├── noisy_latent.py          # 潜空间生成器节点
 ├── save_image_plus.py       # 保存图像增强版节点
+├── execution_metadata.py    # ComfyUI 0.29 执行期参数收集
 ├── monitor.py               # 性能监控后端（系统信息采集、WebSocket 推送）
 ├── web/
 │   └── js/

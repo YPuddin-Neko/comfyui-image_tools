@@ -3,8 +3,9 @@ ComfyUI Image Selector - 保存图像增强版节点 (Save Image Plus)
 
 移植自 ComfyUI-Danbooru-Gallery (https://github.com/Aaalice233/ComfyUI-Danbooru-Gallery)
 在原版基础上进行了独立实现和改进：
-- 移除对 metadata_collector / hash_cache_manager 等外部模块的依赖
-- 增强种子读取兼容性（支持引用链追踪、多种采样器节点）
+- 内置适配 ComfyUI 0.29 的轻量执行期元数据收集器
+- 保留独立哈希计算，不依赖原插件的 metadata_collector / hash_cache_manager
+- 支持标准采样器与高级自定义采样器的真实运行参数
 - 修复子工作流 (Group Node) 中无法保存的问题
 
 支持直接传入提示词和 LoRA 语法，自动生成 A1111 格式的元数据
@@ -21,6 +22,12 @@ from PIL.PngImagePlugin import PngInfo
 import numpy as np
 import folder_paths
 from concurrent.futures import ThreadPoolExecutor, as_completed
+
+try:
+    from .execution_metadata import extract_execution_parameters
+except ImportError:
+    def extract_execution_parameters(prompt_obj=None, save_node_id=None):
+        return {}
 
 
 class SaveImagePlus:
@@ -137,6 +144,7 @@ class SaveImagePlus:
                 }),
             },
             "hidden": {
+                "unique_id": "UNIQUE_ID",
                 "prompt": "PROMPT",
                 "extra_pnginfo": "EXTRA_PNGINFO",
             },
@@ -205,13 +213,14 @@ class SaveImagePlus:
 
         return filename
 
-    def _resolve_value(self, prompt_obj, value, depth=0):
+    def _resolve_value(self, prompt_obj, value, depth=0, field=None):
         """
         解析值引用链
         在 ComfyUI 的 prompt 中，输入值可能是:
         - 直接值: 12345
         - 引用: ["node_id", output_index] 指向另一个节点的输出
-        此方法会追踪引用链找到实际的标量值
+        解析时优先使用引用的 output_index 和目标字段语义，避免从多输出
+        节点中随意取第一个数值。
         """
         # 防止无限递归
         if depth > 10:
@@ -223,14 +232,70 @@ class SaveImagePlus:
             if ref_node_id in prompt_obj and isinstance(prompt_obj[ref_node_id], dict):
                 ref_node = prompt_obj[ref_node_id]
                 ref_inputs = ref_node.get("inputs", {})
-                # 查找常见的种子/值字段
-                for key in ["seed", "value", "noise_seed", "number", "int", "Value", "SEED"]:
+
+                # ComfyUI 链接的第二项是输出槽索引。优先读取节点声明的
+                # RETURN_NAMES，才能正确区分 KSampler Config 等多输出节点。
+                output_name = None
+                try:
+                    import nodes as comfy_nodes
+
+                    node_class = comfy_nodes.NODE_CLASS_MAPPINGS.get(
+                        ref_node.get("class_type", "")
+                    )
+                    return_names = getattr(node_class, "RETURN_NAMES", ())
+                    output_index = int(value[1])
+                    if 0 <= output_index < len(return_names):
+                        output_name = str(return_names[output_index])
+                except Exception:
+                    output_name = None
+
+                alias_groups = (
+                    ("seed", "noise_seed", "seed_num"),
+                    ("steps", "steps_total", "step"),
+                    ("refiner_step", "refiner_steps"),
+                    ("cfg", "cfg_scale", "guidance", "guidance_scale", "scale"),
+                    ("sampler", "sampler_name"),
+                    ("scheduler", "scheduler_name"),
+                    ("checkpoint", "ckpt_name", "model_name", "unet_name"),
+                )
+
+                def aliases_for(name):
+                    if not name:
+                        return ()
+                    normalized = str(name).lower()
+                    for aliases in alias_groups:
+                        if normalized in {alias.lower() for alias in aliases}:
+                            return aliases
+                    return (name,)
+
+                candidate_fields = []
+                generic_fields = (
+                    "value", "number", "int", "float", "string", "text",
+                    "Value", "SEED",
+                )
+                for candidate in (
+                    aliases_for(output_name) + aliases_for(field) + generic_fields
+                ):
+                    if candidate not in candidate_fields:
+                        candidate_fields.append(candidate)
+
+                for key in candidate_fields:
                     if key in ref_inputs:
-                        return self._resolve_value(prompt_obj, ref_inputs[key], depth + 1)
-                # 如果引用节点没有已知字段，尝试返回第一个数值型输入
-                for key, val in ref_inputs.items():
-                    if isinstance(val, (int, float)):
-                        return val
+                        return self._resolve_value(
+                            prompt_obj,
+                            ref_inputs[key],
+                            depth + 1,
+                            field=field or output_name,
+                        )
+
+                # 单输入 Primitive 节点可以安全回退；多输入节点解析不明确时
+                # 保留原链接，不再猜测第一个数字。
+                scalar_values = [
+                    val for val in ref_inputs.values()
+                    if isinstance(val, (str, int, float, bool))
+                ]
+                if len(scalar_values) == 1:
+                    return scalar_values[0]
             return value
 
         return value
@@ -266,7 +331,9 @@ class SaveImagePlus:
                     inputs = node_data.get("inputs", {})
                     for field in seed_fields:
                         if field in inputs:
-                            resolved = self._resolve_value(actual_prompt, inputs[field])
+                            resolved = self._resolve_value(
+                                actual_prompt, inputs[field], field="seed"
+                            )
                             if isinstance(resolved, (int, float)) and int(resolved) >= 0:
                                 return int(resolved)
 
@@ -282,7 +349,9 @@ class SaveImagePlus:
                     inputs = node_data.get("inputs", {})
                     for field in seed_fields + ['value', 'Value']:
                         if field in inputs:
-                            resolved = self._resolve_value(actual_prompt, inputs[field])
+                            resolved = self._resolve_value(
+                                actual_prompt, inputs[field], field="seed"
+                            )
                             if isinstance(resolved, (int, float)) and int(resolved) >= 0:
                                 return int(resolved)
 
@@ -292,7 +361,9 @@ class SaveImagePlus:
                 inputs = node_data.get("inputs", {})
                 for field in seed_fields:
                     if field in inputs:
-                        resolved = self._resolve_value(actual_prompt, inputs[field])
+                        resolved = self._resolve_value(
+                            actual_prompt, inputs[field], field="seed"
+                        )
                         if isinstance(resolved, (int, float)) and int(resolved) >= 0:
                             return int(resolved)
 
@@ -407,13 +478,15 @@ class SaveImagePlus:
     # ============================
 
     def _collect_metadata(self, positive_prompt=None, negative_prompt=None,
-                          lora_syntax=None, checkpoint_name=None, prompt_obj=None):
+                          lora_syntax=None, checkpoint_name=None, prompt_obj=None,
+                          unique_id=None):
         """
-        收集元数据（四级降级策略）
+        收集元数据（五级降级策略）
         级别0: 手动传入 checkpoint
         级别1: 直接传入的 prompt/lora
-        级别2: 从 prompt_obj 解析节点参数（独立实现）
-        级别3: 从 prompt 文本提取 LoRA
+        级别2: 从 ComfyUI 执行期已解析输入收集参数
+        级别3: 从 prompt_obj 解析字面量作为兜底
+        级别4: 从 prompt 文本提取 LoRA
         """
         result = {
             "prompt": "",
@@ -440,11 +513,35 @@ class SaveImagePlus:
         if lora_syntax:
             result["loras"] = lora_syntax
 
-        # 级别 2: 从 prompt_obj 解析节点参数
+        # 级别 2: 执行期输入已经由 ComfyUI 解析为真实值。
+        runtime_params = extract_execution_parameters(prompt_obj, unique_id)
+        runtime_fields = {
+            "prompt": "prompt",
+            "negative_prompt": "negative_prompt",
+            "loras": "loras",
+            "steps": "steps",
+            "sampler": "sampler",
+            "scheduler": "scheduler",
+            "cfg_scale": "cfg_scale",
+            "seed": "seed",
+            "size": "size",
+            "checkpoint": "checkpoint",
+        }
+        for result_key, runtime_key in runtime_fields.items():
+            value = runtime_params.get(runtime_key)
+            if value is None or value == "":
+                continue
+            if result_key in ("prompt", "negative_prompt", "loras"):
+                if not result[result_key]:
+                    result[result_key] = value
+            elif result[result_key] is None:
+                result[result_key] = value
+
+        # 级别 3: prompt 图只用于字面量和旧版 ComfyUI 的降级路径。
         if prompt_obj:
             self._extract_params_from_prompt(prompt_obj, result)
 
-        # 级别 3: 从正面提示词中提取 LoRA
+        # 级别 4: 从正面提示词中提取 LoRA
         if not result["loras"] and result["prompt"]:
             lora_pattern = r'<lora:[^>]+>'
             loras_found = re.findall(lora_pattern, result["prompt"])
@@ -478,26 +575,36 @@ class SaveImagePlus:
             )
             if class_type in sampler_class_types:
                 if result["steps"] is None and "steps" in inputs:
-                    val = self._resolve_value(actual_prompt, inputs["steps"])
+                    val = self._resolve_value(
+                        actual_prompt, inputs["steps"], field="steps"
+                    )
                     if isinstance(val, (int, float)):
                         result["steps"] = int(val)
                 if result["sampler"] is None and "sampler_name" in inputs:
-                    val = inputs["sampler_name"]
+                    val = self._resolve_value(
+                        actual_prompt, inputs["sampler_name"], field="sampler_name"
+                    )
                     if isinstance(val, str):
                         result["sampler"] = val
                 if result["scheduler"] is None and "scheduler" in inputs:
-                    val = inputs["scheduler"]
+                    val = self._resolve_value(
+                        actual_prompt, inputs["scheduler"], field="scheduler"
+                    )
                     if isinstance(val, str):
                         result["scheduler"] = val
                 if result["seed"] is None:
                     for field in ["seed", "noise_seed", "seed_num"]:
                         if field in inputs:
-                            val = self._resolve_value(actual_prompt, inputs[field])
+                            val = self._resolve_value(
+                                actual_prompt, inputs[field], field="seed"
+                            )
                             if isinstance(val, (int, float)) and int(val) >= 0:
                                 result["seed"] = int(val)
                                 break
                 if result["cfg_scale"] is None and "cfg" in inputs:
-                    val = self._resolve_value(actual_prompt, inputs["cfg"])
+                    val = self._resolve_value(
+                        actual_prompt, inputs["cfg"], field="cfg"
+                    )
                     if isinstance(val, (int, float)):
                         result["cfg_scale"] = val
 
@@ -612,7 +719,7 @@ class SaveImagePlus:
                     use_custom_path=False, custom_save_path="",
                     positive_prompt=None, negative_prompt=None,
                     lora_syntax=None, checkpoint_name=None,
-                    prompt=None, extra_pnginfo=None):
+                    unique_id=None, prompt=None, extra_pnginfo=None):
         """
         保存图像主方法
         支持 PNG/JPEG/WEBP 格式，可嵌入 A1111 元数据和工作流
@@ -626,8 +733,12 @@ class SaveImagePlus:
             negative_prompt=negative_prompt,
             lora_syntax=lora_syntax,
             checkpoint_name=checkpoint_name,
-            prompt_obj=prompt
+            prompt_obj=prompt,
+            unique_id=unique_id,
         )
+
+        if metadata["size"] is None and len(images) > 0:
+            metadata["size"] = f"{int(images[0].shape[1])}x{int(images[0].shape[0])}"
 
         # 格式化元数据
         formatted_metadata = self._format_metadata(metadata)

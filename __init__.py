@@ -7,6 +7,13 @@ from .nodes import NODE_CLASS_MAPPINGS, NODE_DISPLAY_NAME_MAPPINGS
 
 WEB_DIRECTORY = "./web/js"
 
+# ComfyUI 0.29: collect resolved runtime inputs for SaveImagePlus metadata.
+try:
+    from .execution_metadata import install_execution_metadata_hook
+    install_execution_metadata_hook()
+except Exception as e:
+    print(f"[ImageTools] 生成参数收集器启动失败: {e}")
+
 # 启动性能监控
 try:
     from .monitor import setup_monitor
